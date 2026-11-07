@@ -9,7 +9,7 @@
 :root{--o:#ff7a1a;--w:#fff;--k:#000}
 *{margin:0;padding:0;box-sizing:border-box}
 html,body{height:100%;background:#000;color:#fff;font-family:Inter,"Helvetica Neue",Arial,sans-serif;overflow:hidden;touch-action:manipulation}
-canvas{position:fixed;inset:0;width:100%;height:100%;display:block}
+canvas{position:fixed;inset:0;width:100%;height:100%;display:block;touch-action:none}
 #brand{position:fixed;top:12px;left:12px;z-index:3;width:52px;height:52px;pointer-events:none}
 #ui{position:fixed;left:0;right:0;bottom:0;z-index:4;padding:12px;padding-bottom:calc(12px + env(safe-area-inset-bottom,0px));background:linear-gradient(transparent,#000 70%);display:flex;flex-direction:column;gap:8px;transition:opacity .3s}
 #ui.hidden{opacity:0;pointer-events:none}
@@ -31,6 +31,12 @@ h1 span{color:var(--o)}
 #start p{max-width:380px;color:#aaa;line-height:1.5;font-size:14px}
 .row{display:flex;gap:10px;flex-wrap:wrap;justify-content:center}
 #err{color:var(--o);max-width:380px;min-height:1em;font-size:13px}
+#menuWrap{position:fixed;inset:0;z-index:6;background:rgba(0,0,0,.55);display:none}
+#menu{position:absolute;background:#000;border:2px solid var(--o);border-radius:18px;padding:12px;display:flex;flex-direction:column;gap:8px;min-width:170px}
+#menu .menu-title{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--o);padding:0 4px}
+#menu button{width:100%;text-align:left}
+#toast{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%) scale(.95);z-index:7;background:#000;color:#fff;border:2px solid var(--o);border-radius:999px;padding:10px 20px;font-weight:900;text-transform:uppercase;letter-spacing:.06em;font-size:16px;opacity:0;pointer-events:none;transition:opacity .2s,transform .2s}
+#toast.show{opacity:1;transform:translate(-50%,-50%) scale(1)}
 </style>
 </head>
 <body>
@@ -61,11 +67,13 @@ h1 span{color:var(--o)}
   <div id="modes"></div>
   <div class="bar">
     <label>Kleur<input type="range" min="0" max="360" value="25" oninput="S.hue=+this.value"></label>
-    <label>Gevoeligheid<input type="range" min="0.2" max="3" step="0.1" value="1" oninput="S.sens=+this.value"></label>
+    <label>Gevoeligheid<input type="range" id="sensSlider" min="0.2" max="3" step="0.1" value="1" oninput="S.sens=+this.value"></label>
     <label>Nasporen<input type="range" min="0" max="0.95" step="0.01" value="0.5" oninput="S.trail=+this.value"></label>
   </div>
 </div>
 <button id="showBtn" class="primary" onclick="toggleUI()">Toon balk</button>
+<div id="menuWrap" onclick="if(event.target===this)closeMenu()"><div id="menu"><div class="menu-title">Sfeer kiezen</div></div></div>
+<div id="toast"></div>
 
 <script>
 const OCC = {
@@ -149,12 +157,80 @@ addEventListener('keydown', e => {
   if (e.key === 'Escape') showStart();
 });
 
-// Tik op het scherm: grote sticker of emoji plus een kleine explosie
-addEventListener('pointerdown', e => {
-  if (document.getElementById('start').classList.contains('gone') === false) return;
-  if (e.target.closest('#ui,#showBtn,button,select,input')) return;
-  spawnBurst(e.clientX, e.clientY);
+// Gebaren op het beeld, overal op het scherm:
+// tik = sticker/emoji, omhoog/omlaag slepen = gevoeligheid (balk verborgen),
+// links/rechts vegen = ander effect, ingedrukt houden = sfeermenu
+const menuWrap = document.getElementById('menuWrap');
+const menuEl = document.getElementById('menu');
+const toastEl = document.getElementById('toast');
+let gest = null, lpTimer = null, toastTimer = null;
+
+function isHidden(){ return document.getElementById('ui').classList.contains('hidden'); }
+function showToast(txt){
+  toastEl.textContent = txt;
+  toastEl.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => toastEl.classList.remove('show'), 900);
+}
+function openMenu(x, y){
+  menuEl.querySelectorAll('button').forEach(b => b.remove());
+  Object.keys(OCC).forEach(k => {
+    const b = document.createElement('button');
+    b.textContent = k;
+    if (k === S.occ) b.classList.add('on');
+    b.onclick = e => { e.stopPropagation(); setOcc(k); closeMenu(); showToast(k); };
+    menuEl.appendChild(b);
+  });
+  menuWrap.style.display = 'flex';
+  // Menu bij de vinger, maar wel binnen het scherm
+  const mw = menuEl.offsetWidth || 200, mh = menuEl.offsetHeight || 300;
+  menuEl.style.left = Math.min(Math.max(8, x - mw / 2), W - mw - 8) + 'px';
+  menuEl.style.top = Math.min(Math.max(8, y - mh / 2), H - mh - 8) + 'px';
+}
+function closeMenu(){ menuWrap.style.display = 'none'; }
+
+cv.addEventListener('pointerdown', e => {
+  if (!document.getElementById('start').classList.contains('gone')) return;
+  gest = { id: e.pointerId, x0: e.clientX, y0: e.clientY, x: e.clientX, y: e.clientY, moved: false, mode: 'tap', sens0: S.sens };
+  cv.setPointerCapture(e.pointerId);
+  clearTimeout(lpTimer);
+  lpTimer = setTimeout(() => {
+    if (gest && !gest.moved) { gest.mode = 'menu'; openMenu(gest.x0, gest.y0); }
+  }, 550);
 });
+
+cv.addEventListener('pointermove', e => {
+  if (!gest || e.pointerId !== gest.id) return;
+  gest.x = e.clientX; gest.y = e.clientY;
+  const dx = gest.x - gest.x0, dy = gest.y - gest.y0;
+  if (!gest.moved && Math.hypot(dx, dy) > 12) { gest.moved = true; clearTimeout(lpTimer); }
+  if (!gest.moved) return;
+  if (gest.mode === 'tap' && isHidden() && Math.abs(dy) > Math.abs(dx) * 1.5) gest.mode = 'sens';
+  if (gest.mode === 'sens') {
+    const s = Math.min(3, Math.max(0.2, gest.sens0 - dy / (H * 0.5) * 2.8));
+    S.sens = Math.round(s * 10) / 10;
+    document.getElementById('sensSlider').value = S.sens;
+    showToast('Gevoeligheid ' + S.sens.toFixed(1));
+  }
+});
+
+cv.addEventListener('pointerup', e => {
+  clearTimeout(lpTimer);
+  if (!gest || e.pointerId !== gest.id) return;
+  const g = gest; gest = null;
+  if (g.mode === 'menu' || g.mode === 'sens') return;
+  if (!g.moved) { spawnBurst(g.x0, g.y0); return; }
+  const dx = g.x - g.x0, dy = g.y - g.y0;
+  if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy)) {
+    // Naar links vegen = volgend effect, naar rechts = vorig effect
+    S.mode = (S.mode + (dx < 0 ? 1 : NAMES.length - 1)) % NAMES.length;
+    autoTimer = performance.now();
+    updateButtons();
+    showToast(NAMES[S.mode]);
+  }
+});
+
+cv.addEventListener('pointercancel', () => { clearTimeout(lpTimer); gest = null; });
 
 function pickItem(){
   const o = OCC[S.occ];
