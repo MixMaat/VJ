@@ -82,7 +82,7 @@ for (const k in IMG_SRC) { IMGS[k] = new Image(); IMGS[k].src = IMG_SRC[k]; }
 const cv = document.getElementById('c'), ctx = cv.getContext('2d');
 let W, H, DPR;
 function resize(){
-  DPR = window.devicePixelRatio || 1;
+  DPR = Math.min(window.devicePixelRatio || 1, 1.5);
   W = innerWidth; H = innerHeight;
   cv.width = W * DPR; cv.height = H * DPR;
   ctx.setTransform(DPR,0,0,DPR,0,0);
@@ -159,7 +159,8 @@ addEventListener('pointerdown', e => {
 function pickItem(){
   const o = OCC[S.occ];
   if (o.img.length && Math.random() < 0.4) {
-    return { img: IMGS[o.img[Math.floor(Math.random() * o.img.length)]] };
+    const k = o.img[Math.floor(Math.random() * o.img.length)];
+    return { img: IMGS[k], imgKey: k };
   }
   return { t: o.emo[Math.floor(Math.random() * o.emo.length)] };
 }
@@ -172,12 +173,48 @@ function spawnBurst(x, y){
     const a = Math.random() * Math.PI * 2, sp = 2 + Math.random() * 4;
     floats.push(makeItem(x, y, Math.cos(a)*sp, Math.sin(a)*sp - 2, 0.18, 16 + Math.random()*10, (Math.random()-.5)*1.5));
   }
-  if (floats.length > 200) floats.splice(0, floats.length - 200);
+  if (floats.length > 80) floats.splice(0, floats.length - 80);
 }
 // Bij elke beat een kleine sticker die omhoog zweeft
 function rainItem(){
-  if (!S.rain || floats.length > 120) return;
+  if (!S.rain || floats.length > 40) return;
   floats.push(makeItem(Math.random()*W, H + 20, (Math.random()-.5)*1.2, -(3 + Math.random()*3), 0, 18 + Math.random()*12, (Math.random()-.5)*0.6));
+}
+
+// Sprites: elk emoticon/sticker wordt één keer getekend in een ronde badge en daarna hergebruikt
+const SPRITES = new Map();
+const SPR = 96;
+function ring(g){
+  g.beginPath(); g.arc(SPR/2, SPR/2, SPR/2 - 4, 0, Math.PI*2);
+  g.lineWidth = 6; g.strokeStyle = '#ff7a1a'; g.stroke();
+}
+function getSprite(p){
+  let key, draw;
+  if (p.img) {
+    if (!p.img.complete || !p.img.naturalWidth) return null;
+    key = 'img:' + p.imgKey;
+    draw = g => {
+      g.beginPath(); g.arc(SPR/2, SPR/2, SPR/2 - 4, 0, Math.PI*2); g.fillStyle = '#000'; g.fill();
+      g.save(); g.clip(); g.drawImage(p.img, 0, 0, SPR, SPR); g.restore();
+      ring(g);
+    };
+  } else {
+    key = 'emo:' + p.t;
+    draw = g => {
+      g.beginPath(); g.arc(SPR/2, SPR/2, SPR/2 - 4, 0, Math.PI*2); g.fillStyle = '#000'; g.fill();
+      g.font = `${Math.round(SPR*0.6)}px "Apple Color Emoji","Segoe UI Emoji",system-ui,sans-serif`;
+      g.textAlign = 'center'; g.textBaseline = 'middle';
+      g.fillText(p.t, SPR/2, SPR/2 + 4);
+      ring(g);
+    };
+  }
+  if (!SPRITES.has(key)) {
+    const c = document.createElement('canvas');
+    c.width = c.height = SPR;
+    draw(c.getContext('2d'));
+    SPRITES.set(key, c);
+  }
+  return SPRITES.get(key);
 }
 
 function drawFloats(){
@@ -186,31 +223,15 @@ function drawFloats(){
     p.x += p.vx; p.y += p.vy; p.vy += p.g;
     p.life -= p.g ? 0.02 : 0.011;
     if (p.life <= 0) { floats.splice(i, 1); continue; }
-    ctx.save();
+    const sp = getSprite(p);
+    if (!sp) continue;
+    const c = Math.cos(p.rot), s = Math.sin(p.rot);
     ctx.globalAlpha = Math.min(1, p.life * 1.5);
-    ctx.translate(p.x, p.y);
-    ctx.rotate(p.rot);
-    // Ronde achtergrond
-    ctx.beginPath(); ctx.arc(0, 0, p.d/2, 0, Math.PI*2); ctx.fillStyle = '#000'; ctx.fill();
-    if (p.img) {
-      if (p.img.complete && p.img.naturalWidth) {
-        ctx.save();
-        ctx.beginPath(); ctx.arc(0, 0, p.d/2, 0, Math.PI*2); ctx.clip();
-        ctx.drawImage(p.img, -p.d/2, -p.d/2, p.d, p.d);
-        ctx.restore();
-      }
-    } else {
-      ctx.font = `${Math.round(p.d*0.6)}px "Apple Color Emoji","Segoe UI Emoji",system-ui,sans-serif`;
-      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      ctx.fillText(p.t, 0, 1);
-    }
-    // Oranje rand
-    ctx.beginPath(); ctx.arc(0, 0, p.d/2, 0, Math.PI*2);
-    ctx.lineWidth = Math.max(1.5, p.d * 0.06);
-    ctx.strokeStyle = '#ff7a1a';
-    ctx.stroke();
-    ctx.restore();
+    ctx.setTransform(DPR*c, DPR*s, -DPR*s, DPR*c, p.x*DPR, p.y*DPR);
+    ctx.drawImage(sp, -p.d/2, -p.d/2, p.d, p.d);
   }
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  ctx.globalAlpha = 1;
 }
 
 function readAudio(t){
@@ -296,12 +317,12 @@ function drawWave(f){
 }
 
 function drawParticles(f){
-  const spawn = Math.floor(f.vol * 20 * S.sens + beatLevel * 40);
+  const spawn = Math.floor(f.vol * 12 * S.sens + beatLevel * 20);
   for (let i = 0; i < spawn; i++) {
     const a = Math.random() * Math.PI * 2, sp = (1 + Math.random() * 4) * (0.5 + f.bass * S.sens);
     parts.push({ x: W / 2, y: H / 2, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, life: 1, h: S.hue + Math.random() * 30 - 15 });
   }
-  if (parts.length > 3000) parts.splice(0, parts.length - 3000);
+  if (parts.length > 1200) parts.splice(0, parts.length - 1200);
   for (let i = parts.length - 1; i >= 0; i--) {
     const p = parts[i];
     p.x += p.vx; p.y += p.vy; p.vx *= 1.01; p.vy *= 1.01; p.life -= 0.008;
